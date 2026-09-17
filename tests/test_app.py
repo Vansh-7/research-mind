@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -66,6 +69,24 @@ class StreamlitSmokeTests(unittest.TestCase):
         self.assertTrue(
             any("Add" in item.value and ".env" in item.value for item in rendered.markdown)
         )
+
+    def test_entrypoint_imports_src_outside_repository(self):
+        command = (
+            "import runpy; "
+            f"runpy.run_path({str(self._app_path())!r}, "
+            "run_name='streamlit_cloud_import')"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            completed = subprocess.run(
+                [sys.executable, "-c", command],
+                cwd=directory,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
 
     def test_completed_result_survives_a_rerun_and_exposes_download(self):
         from streamlit.testing.v1 import AppTest

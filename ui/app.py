@@ -5,10 +5,18 @@ from __future__ import annotations
 import html
 import os
 import re
+import sys
+from pathlib import Path
 from typing import Any
 
 import streamlit as st
 from dotenv import load_dotenv
+
+# Streamlit Cloud executes subdirectory entrypoints with ``ui/`` on sys.path.
+# Add the repository root so the sibling ``src`` package resolves consistently.
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.pipeline import PipelineEvent, ResearchState, run_research_pipeline
 
