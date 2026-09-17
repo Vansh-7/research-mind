@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import app as app
+from ui import app
 
 
 class AppHelperTests(unittest.TestCase):
@@ -45,7 +45,7 @@ class AppHelperTests(unittest.TestCase):
 class StreamlitSmokeTests(unittest.TestCase):
     @staticmethod
     def _app_path() -> Path:
-        return Path(__file__).resolve().parents[1] / "app.py"
+        return Path(__file__).resolve().parents[1] / "ui" / "app.py"
 
     def test_app_renders_without_credentials(self):
         from streamlit.testing.v1 import AppTest

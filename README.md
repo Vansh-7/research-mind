@@ -36,7 +36,7 @@ Keys are only validated when a research run starts.
 ## Run the interface
 
 ```powershell
-uv run streamlit run app.py
+uv run streamlit run ui/app.py
 ```
 
 Then open the local address printed by Streamlit, usually
