@@ -10,6 +10,8 @@ from tavily import TavilyClient
 
 load_dotenv()
 
+MAX_SNIPPET_CHARS = 300
+
 
 @tool
 def web_search(query: str) -> str:
@@ -28,7 +30,8 @@ def web_search(query: str) -> str:
                 [
                     f"Title: {result.get('title', 'Untitled source')}",
                     f"URL: {result.get('url', '')}",
-                    f"Snippet: {result.get('content', '')}",
+                    "Snippet: "
+                    f"{str(result.get('content') or '')[:MAX_SNIPPET_CHARS]}",
                 ]
             )
         )

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 from typing import Literal, NotRequired, TypedDict
 
 from .agents import (
+    GROQ_MODEL,
     build_critic_chain,
     build_reader_agent,
     build_search_agent,
@@ -47,6 +49,34 @@ def _message_content(response: dict) -> str:
     if isinstance(content, str):
         return content
     return str(content)
+
+
+def _is_rate_limit_error(exc: Exception) -> bool:
+    response = getattr(exc, "response", None)
+    return (
+        getattr(exc, "status_code", None) == 429
+        or getattr(response, "status_code", None) == 429
+    )
+
+
+def _retry_after_seconds(exc: Exception) -> int:
+    """Return Groq's retry delay, with a safe fallback for exhausted quotas."""
+    response = getattr(exc, "response", None)
+    headers = getattr(response, "headers", {})
+    try:
+        return max(1, math.ceil(float(headers.get("retry-after", 60))))
+    except (TypeError, ValueError):
+        return 60
+
+
+def _provider_error_message(exc: Exception) -> str:
+    if not _is_rate_limit_error(exc):
+        return str(exc)
+    wait_seconds = _retry_after_seconds(exc)
+    return (
+        f"Groq's {GROQ_MODEL} quota is temporarily exhausted. "
+        f"Try again in about {wait_seconds} seconds. Completed stages are preserved."
+    )
 
 
 def run_research_pipeline(
@@ -138,11 +168,14 @@ def run_research_pipeline(
             "output": state["feedback"],
         })
     except Exception as exc:
+        message = _provider_error_message(exc)
         _emit(on_event, {
             "stage": current_stage,
             "state": "error",
-            "message": str(exc),
+            "message": message,
         })
+        if _is_rate_limit_error(exc):
+            raise RuntimeError(message) from exc
         raise
 
     return ResearchState(**state)

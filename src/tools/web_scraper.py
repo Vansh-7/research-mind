@@ -6,7 +6,7 @@ from bs4 import BeautifulSoup
 from langchain.tools import tool
 import requests
 
-MAX_CONTENT_CHARS = 12_000
+MAX_CONTENT_CHARS = 4_000
 
 
 @tool

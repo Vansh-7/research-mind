@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 from langchain.agents import create_agent
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.rate_limiters import InMemoryRateLimiter
 from langchain_groq import ChatGroq
 
 from .tools.search_api import web_search
@@ -15,24 +16,62 @@ from .tools.web_scraper import scrape_url
 
 load_dotenv()
 
+GROQ_MODEL = "openai/gpt-oss-120b"
+GROQ_REQUESTS_PER_MINUTE = 30
+GROQ_REQUESTS_PER_DAY = 1_000
+GROQ_TOKENS_PER_MINUTE = 8_000
+GROQ_TOKENS_PER_DAY = 200_000
 
-def _build_llm() -> ChatGroq:
+# TPM is the tighter limit for this multi-step pipeline. Five requests per
+# minute, bounded tool context, and stage-specific completion budgets leave
+# headroom for prompts and low-effort reasoning under the 8K TPM ceiling. The
+# limiter is shared by every model instance, coordinating Streamlit sessions
+# inside one application process.
+SAFE_REQUESTS_PER_MINUTE = 5
+SEARCH_MAX_TOKENS = 450
+READER_MAX_TOKENS = 600
+REPORT_MAX_TOKENS = 900
+CRITIC_MAX_TOKENS = 450
+_MODEL_RATE_LIMITER = InMemoryRateLimiter(
+    requests_per_second=SAFE_REQUESTS_PER_MINUTE / 60,
+    check_every_n_seconds=0.1,
+    max_bucket_size=1,
+)
+# Allow the first request immediately; subsequent calls consume the shared rate.
+_MODEL_RATE_LIMITER.available_tokens = 1.0
+
+
+def _build_llm(*, max_tokens: int) -> ChatGroq:
     """Return the shared model configuration after validating credentials."""
     if not os.getenv("GROQ_API_KEY"):
         raise RuntimeError(
             "GROQ_API_KEY is missing. Add it to .env before running research."
         )
-    return ChatGroq(model="openai/gpt-oss-120b", temperature=0)
+    return ChatGroq(
+        model=GROQ_MODEL,
+        temperature=0,
+        reasoning_effort="low",
+        max_tokens=max_tokens,
+        max_retries=4,
+        timeout=60,
+        rate_limiter=_MODEL_RATE_LIMITER,
+    )
 
 
 def build_search_agent():
     """Build the web-search agent."""
-    return create_agent(model=_build_llm(), tools=[web_search])
+    return create_agent(
+        model=_build_llm(max_tokens=SEARCH_MAX_TOKENS),
+        tools=[web_search],
+    )
 
 
 def build_reader_agent():
     """Build the agent that selects and reads a promising source."""
-    return create_agent(model=_build_llm(), tools=[scrape_url])
+    return create_agent(
+        model=_build_llm(max_tokens=READER_MAX_TOKENS),
+        tools=[scrape_url],
+    )
 
 
 def build_writer_chain():
@@ -62,7 +101,11 @@ def build_writer_chain():
             ),
         ]
     )
-    return prompt | _build_llm() | StrOutputParser()
+    return (
+        prompt
+        | _build_llm(max_tokens=REPORT_MAX_TOKENS)
+        | StrOutputParser()
+    )
 
 
 def build_critic_chain():
@@ -97,4 +140,8 @@ def build_critic_chain():
             )
         ]
     )
-    return prompt | _build_llm() | StrOutputParser()
+    return (
+        prompt
+        | _build_llm(max_tokens=CRITIC_MAX_TOKENS)
+        | StrOutputParser()
+    )

@@ -97,6 +97,25 @@ class PipelineTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "cannot be blank"):
             pipeline.run_research_pipeline("   ")
 
+    @patch.object(pipeline, "build_search_agent")
+    def test_pipeline_translates_rate_limit_errors(self, search):
+        error = RuntimeError("raw provider response")
+        error.status_code = 429
+        error.response = SimpleNamespace(
+            status_code=429,
+            headers={"retry-after": "12.2"},
+        )
+        search.return_value = Invokable(error)
+        events = []
+
+        with self.assertRaisesRegex(RuntimeError, "about 13 seconds"):
+            pipeline.run_research_pipeline("edge AI", on_event=events.append)
+
+        self.assertEqual(events[-1]["stage"], "search")
+        self.assertEqual(events[-1]["state"], "error")
+        self.assertIn("openai/gpt-oss-120b", events[-1]["message"])
+        self.assertIn("Completed stages are preserved", events[-1]["message"])
+
 
 if __name__ == "__main__":
     unittest.main()
