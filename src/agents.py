@@ -52,7 +52,9 @@ def _build_llm(*, max_tokens: int) -> ChatGroq:
         temperature=0,
         reasoning_effort="low",
         max_tokens=max_tokens,
-        max_retries=4,
+        # Pipeline-level retries can surface the cooldown in Streamlit and
+        # resume the affected stage after Groq's exact retry interval.
+        max_retries=0,
         timeout=60,
         rate_limiter=_MODEL_RATE_LIMITER,
     )

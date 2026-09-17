@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import math
+import re
+import time
 from collections.abc import Callable
 from typing import Literal, NotRequired, TypedDict
 
@@ -40,6 +42,11 @@ MAX_READER_SEARCH_TOKENS = 300
 MAX_WRITER_SEARCH_TOKENS = 450
 MAX_WRITER_EVIDENCE_TOKENS = 550
 MAX_CRITIC_REPORT_TOKENS = 800
+MAX_RATE_LIMIT_RETRIES = 2
+_RETRY_SECONDS_PATTERN = re.compile(
+    r"(?:try again|retry)\s+in\s+([0-9]+(?:\.[0-9]+)?)s",
+    re.IGNORECASE,
+)
 
 
 def _emit(on_event: EventCallback | None, event: PipelineEvent) -> None:
@@ -58,15 +65,19 @@ def _message_content(response: dict) -> str:
     return str(content)
 
 
-def _is_rate_limit_error(exc: Exception) -> bool:
+def _status_code(exc: Exception) -> int | None:
     response = getattr(exc, "response", None)
-    body = getattr(exc, "body", None)
-    error = body.get("error", {}) if isinstance(body, dict) else {}
-    status_code = getattr(
+    return getattr(
         exc,
         "status_code",
         getattr(response, "status_code", None),
     )
+
+
+def _is_rate_limit_error(exc: Exception) -> bool:
+    body = getattr(exc, "body", None)
+    error = body.get("error", {}) if isinstance(body, dict) else {}
+    status_code = _status_code(exc)
     return (
         status_code == 429
         or (status_code == 413 and error.get("code") == "rate_limit_exceeded")
@@ -77,10 +88,52 @@ def _retry_after_seconds(exc: Exception) -> int:
     """Return Groq's retry delay, with a safe fallback for exhausted quotas."""
     response = getattr(exc, "response", None)
     headers = getattr(response, "headers", {})
+    header_value = headers.get("retry-after")
     try:
-        return max(1, math.ceil(float(headers.get("retry-after", 60))))
+        if header_value is not None:
+            return max(1, math.ceil(float(header_value)))
     except (TypeError, ValueError):
-        return 60
+        pass
+
+    body = getattr(exc, "body", None)
+    error = body.get("error", {}) if isinstance(body, dict) else {}
+    message = error.get("message", str(exc))
+    match = _RETRY_SECONDS_PATTERN.search(message)
+    if match:
+        return max(1, math.ceil(float(match.group(1))))
+    return 60
+
+
+def _invoke_with_rate_limit_retry(
+    action: Callable[[], object],
+    *,
+    stage: StageName,
+    on_event: EventCallback | None,
+) -> object:
+    """Run one stage and transparently honor Groq's rolling TPM cooldown."""
+    for retry_number in range(MAX_RATE_LIMIT_RETRIES + 1):
+        try:
+            return action()
+        except Exception as exc:
+            if (
+                _status_code(exc) != 429
+                or retry_number >= MAX_RATE_LIMIT_RETRIES
+            ):
+                raise
+
+            wait_seconds = _retry_after_seconds(exc)
+            _emit(on_event, {
+                "stage": stage,
+                "state": "running",
+                "message": (
+                    "Groq's token window is full. "
+                    f"Resuming automatically in {wait_seconds} seconds "
+                    f"(retry {retry_number + 1}/{MAX_RATE_LIMIT_RETRIES})."
+                ),
+            })
+            time.sleep(wait_seconds)
+
+    raise RuntimeError("Rate-limit retry loop ended unexpectedly.")
 
 
 def _provider_error_message(exc: Exception) -> str:
@@ -115,10 +168,15 @@ def run_research_pipeline(
             "state": "running",
             "message": "Querying the web for five relevant, recent sources.",
         })
-        search_result = build_search_agent().invoke({
-            "messages": [("user", "Find recent, reliable and detailed "
-                          f"information about: {normalized_topic}")]
-        })
+        search_agent = build_search_agent()
+        search_result = _invoke_with_rate_limit_retry(
+            lambda: search_agent.invoke({
+                "messages": [("user", "Find recent, reliable and detailed "
+                              f"information about: {normalized_topic}")]
+            }),
+            stage="search",
+            on_event=on_event,
+        )
         state["search_results"] = _message_content(search_result)
         _emit(on_event, {
             "stage": "search",
@@ -133,13 +191,18 @@ def run_research_pipeline(
             "state": "running",
             "message": "Selecting and extracting the strongest source.",
         })
-        reader_result = build_reader_agent().invoke({
-            "messages": [("user", f"Based on the following search results about "
-                          f"'{normalized_topic}', pick the most relevant URL and "
-                          "scrape it for deeper content.\n\n"
-                          "Search Results:\n"
-                          f"{truncate_tokens(state['search_results'], MAX_READER_SEARCH_TOKENS)}")]
-        })
+        reader_agent = build_reader_agent()
+        reader_result = _invoke_with_rate_limit_retry(
+            lambda: reader_agent.invoke({
+                "messages": [("user", f"Based on the following search results about "
+                              f"'{normalized_topic}', pick the most relevant URL and "
+                              "scrape it for deeper content.\n\n"
+                              "Search Results:\n"
+                              f"{truncate_tokens(state['search_results'], MAX_READER_SEARCH_TOKENS)}")]
+            }),
+            stage="reader",
+            on_event=on_event,
+        )
         state["scraped_content"] = _message_content(reader_result)
         _emit(on_event, {
             "stage": "reader",
@@ -160,8 +223,13 @@ def run_research_pipeline(
             "\n\nDETAILED SCRAPED CONTENT:\n"
             f"{truncate_tokens(state['scraped_content'], MAX_WRITER_EVIDENCE_TOKENS)}"
         )
-        state["report"] = build_writer_chain().invoke(
-            {"topic": normalized_topic, "research": research}
+        writer_chain = build_writer_chain()
+        state["report"] = _invoke_with_rate_limit_retry(
+            lambda: writer_chain.invoke(
+                {"topic": normalized_topic, "research": research}
+            ),
+            stage="writer",
+            on_event=on_event,
         )
         _emit(on_event, {
             "stage": "writer",
@@ -176,12 +244,17 @@ def run_research_pipeline(
             "state": "running",
             "message": "Reviewing evidence, structure, and clarity.",
         })
-        state["feedback"] = build_critic_chain().invoke(
-            {
-                "report": truncate_tokens(
-                    state["report"], MAX_CRITIC_REPORT_TOKENS
-                )
-            }
+        critic_chain = build_critic_chain()
+        state["feedback"] = _invoke_with_rate_limit_retry(
+            lambda: critic_chain.invoke(
+                {
+                    "report": truncate_tokens(
+                        state["report"], MAX_CRITIC_REPORT_TOKENS
+                    )
+                }
+            ),
+            stage="critic",
+            on_event=on_event,
         )
         _emit(on_event, {
             "stage": "critic",

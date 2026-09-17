@@ -18,7 +18,7 @@ class AgentConfigurationTests(unittest.TestCase):
         self.assertEqual(options["model"], "openai/gpt-oss-120b")
         self.assertEqual(options["reasoning_effort"], "low")
         self.assertEqual(options["max_tokens"], 777)
-        self.assertEqual(options["max_retries"], 4)
+        self.assertEqual(options["max_retries"], 0)
         self.assertIs(options["rate_limiter"], agents._MODEL_RATE_LIMITER)
 
 

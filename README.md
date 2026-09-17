@@ -268,7 +268,7 @@ private model reasoning or chain-of-thought.
 - Every stage emits an error event before an exception returns to the UI.
 - Completed intermediate output remains available after downstream failures.
 - Groq calls share a process-wide throttle, use bounded prompts and completions,
-  and retry transient failures before showing a clear cooldown message.
+  and automatically resume the affected stage after Groq's reported cooldown.
 - User-visible model output is escaped or rendered through Streamlit's Markdown
   components; operational logs do not reveal hidden model reasoning.
 

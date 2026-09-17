@@ -17,6 +17,17 @@ class Invokable:
         return self.response
 
 
+class SequencedInvokable:
+    def __init__(self, *responses):
+        self.responses = iter(responses)
+
+    def invoke(self, _payload):
+        response = next(self.responses)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+
 def agent_response(content: str) -> dict:
     return {"messages": [SimpleNamespace(content=content)]}
 
@@ -97,24 +108,46 @@ class PipelineTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "cannot be blank"):
             pipeline.run_research_pipeline("   ")
 
+    @patch.object(pipeline.time, "sleep")
+    @patch.object(pipeline, "build_critic_chain")
+    @patch.object(pipeline, "build_writer_chain")
+    @patch.object(pipeline, "build_reader_agent")
     @patch.object(pipeline, "build_search_agent")
-    def test_pipeline_translates_rate_limit_errors(self, search):
+    def test_pipeline_waits_and_resumes_after_rate_limit(
+        self, search, reader, writer, critic, sleep
+    ):
         error = RuntimeError("raw provider response")
         error.status_code = 429
+        error.body = {
+            "error": {
+                "message": "Please try again in 17.865s.",
+                "code": "rate_limit_exceeded",
+            }
+        }
         error.response = SimpleNamespace(
             status_code=429,
-            headers={"retry-after": "12.2"},
+            headers={},
         )
-        search.return_value = Invokable(error)
+        search.return_value = SequencedInvokable(
+            error,
+            agent_response("search output"),
+        )
+        reader.return_value = Invokable(agent_response("reader output"))
+        writer.return_value = Invokable("# report")
+        critic.return_value = Invokable("Score: 8/10")
         events = []
 
-        with self.assertRaisesRegex(RuntimeError, "about 13 seconds"):
-            pipeline.run_research_pipeline("edge AI", on_event=events.append)
+        result = pipeline.run_research_pipeline("edge AI", on_event=events.append)
 
-        self.assertEqual(events[-1]["stage"], "search")
-        self.assertEqual(events[-1]["state"], "error")
-        self.assertIn("openai/gpt-oss-120b", events[-1]["message"])
-        self.assertIn("Completed stages are preserved", events[-1]["message"])
+        sleep.assert_called_once_with(18)
+        self.assertEqual(result["report"], "# report")
+        retry_events = [
+            event for event in events
+            if "Resuming automatically" in event["message"]
+        ]
+        self.assertEqual(len(retry_events), 1)
+        self.assertEqual(retry_events[0]["stage"], "search")
+        self.assertIn("18 seconds", retry_events[0]["message"])
 
     @patch.object(pipeline, "build_search_agent")
     def test_pipeline_translates_tpm_request_too_large_errors(self, search):
