@@ -1,71 +1,154 @@
-from agents import build_reader_agent , build_search_agent , writer_chain , critic_chain
+"""Sequential orchestration for the Research Mind agent pipeline."""
 
-def run_research_pipeline(topic : str) -> dict:
+from __future__ import annotations
 
-    state = {}
+from collections.abc import Callable
+from typing import Literal, NotRequired, TypedDict
 
-    # Step 1: search agent working 
-    print("\n" + "="*50)
-    print("Step 1 - Search agent is working...")
-    print("="*50)
+from .agents import (
+    build_critic_chain,
+    build_reader_agent,
+    build_search_agent,
+    build_writer_chain,
+)
 
-    search_agent = build_search_agent()
-    search_result = search_agent.invoke({
-        "messages" : [("user", f"Find recent, reliable and detailed information about: {topic}")]
-    })
-    state["search_results"] = search_result['messages'][-1].content
+StageName = Literal["search", "reader", "writer", "critic"]
+StageState = Literal["running", "complete", "error"]
 
-    print("\n Search Result: \n",state['search_results'])
 
-    # Step 2: reader agent 
-    print("\n" + "="*50)
-    print("Step 2 - Reader agent is scraping top resources...")
-    print("="*50)
+class ResearchState(TypedDict):
+    search_results: str
+    scraped_content: str
+    report: str
+    feedback: str
 
-    reader_agent = build_reader_agent()
-    reader_result = reader_agent.invoke({
-        "messages": [("user",
-            f"Based on the following search results about '{topic}', "
-            f"pick the most relevant URL and scrape it for deeper content.\n\n"
-            f"Search Results:\n{state['search_results'][:800]}"
-        )]
-    })
 
-    state['scraped_content'] = reader_result['messages'][-1].content
+class PipelineEvent(TypedDict):
+    stage: StageName
+    state: StageState
+    message: str
+    output: NotRequired[str]
 
-    print("\n Scraped Content: \n", state['scraped_content'])
 
-    # Step 3: writer chain 
-    print("\n" + "="*50)
-    print("Step 3 - Writer is drafting the report...")
-    print("="*50)
+EventCallback = Callable[[PipelineEvent], None]
 
-    research_combined = (
-        f"SEARCH RESULTS : \n {state['search_results']} \n\n"
-        f"DETAILED SCRAPED CONTENT : \n {state['scraped_content']}"
-    )
 
-    state["report"] = writer_chain.invoke({
-        "topic" : topic,
-        "research" : research_combined
-    })
+def _emit(on_event: EventCallback | None, event: PipelineEvent) -> None:
+    if on_event is not None:
+        on_event(event)
 
-    print("\n Final Report: \n",state['report'])
 
-    # Step 4: critic report 
-    print("\n" + "="*50)
-    print("Step 4 - Critic is reviewing the report...")
-    print("="*50)
+def _message_content(response: dict) -> str:
+    """Extract the final agent message as text with a stable failure mode."""
+    messages = response.get("messages", [])
+    if not messages:
+        raise RuntimeError("The agent returned no messages.")
+    content = messages[-1].content
+    if isinstance(content, str):
+        return content
+    return str(content)
 
-    state["feedback"] = critic_chain.invoke({
-        "report" : state['report']
-    })
 
-    print("\n Critic Report: \n", state['feedback'])
+def run_research_pipeline(
+    topic: str, *, on_event: EventCallback | None = None
+) -> ResearchState:
+    """Run search, reading, writing, and critique stages in order.
 
-    return state
+    ``on_event`` receives operational progress only. It never receives model
+    reasoning or hidden chain-of-thought content.
+    """
+    normalized_topic = topic.strip()
+    if not normalized_topic:
+        raise ValueError("Research topic cannot be blank.")
+
+    state: dict[str, str] = {}
+    current_stage: StageName = "search"
+
+    try:
+        _emit(on_event, {
+            "stage": "search",
+            "state": "running",
+            "message": "Querying the web for five relevant, recent sources.",
+        })
+        search_result = build_search_agent().invoke({
+            "messages": [("user", "Find recent, reliable and detailed "
+                          f"information about: {normalized_topic}")]
+        })
+        state["search_results"] = _message_content(search_result)
+        _emit(on_event, {
+            "stage": "search",
+            "state": "complete",
+            "message": "Source discovery complete.",
+            "output": state["search_results"],
+        })
+
+        current_stage = "reader"
+        _emit(on_event, {
+            "stage": "reader",
+            "state": "running",
+            "message": "Selecting and extracting the strongest source.",
+        })
+        reader_result = build_reader_agent().invoke({
+            "messages": [("user", f"Based on the following search results about "
+                          f"'{normalized_topic}', pick the most relevant URL and "
+                          "scrape it for deeper content.\n\n"
+                          f"Search Results:\n{state['search_results'][:800]}")]
+        })
+        state["scraped_content"] = _message_content(reader_result)
+        _emit(on_event, {
+            "stage": "reader",
+            "state": "complete",
+            "message": "Source reading complete.",
+            "output": state["scraped_content"],
+        })
+
+        current_stage = "writer"
+        _emit(on_event, {
+            "stage": "writer",
+            "state": "running",
+            "message": "Synthesizing evidence into a structured report.",
+        })
+        research = (
+            f"SEARCH RESULTS:\n{state['search_results']}\n\n"
+            f"DETAILED SCRAPED CONTENT:\n{state['scraped_content']}"
+        )
+        state["report"] = build_writer_chain().invoke(
+            {"topic": normalized_topic, "research": research}
+        )
+        _emit(on_event, {
+            "stage": "writer",
+            "state": "complete",
+            "message": "Research report drafted.",
+            "output": state["report"],
+        })
+
+        current_stage = "critic"
+        _emit(on_event, {
+            "stage": "critic",
+            "state": "running",
+            "message": "Reviewing evidence, structure, and clarity.",
+        })
+        state["feedback"] = build_critic_chain().invoke(
+            {"report": state["report"]}
+        )
+        _emit(on_event, {
+            "stage": "critic",
+            "state": "complete",
+            "message": "Independent critique complete.",
+            "output": state["feedback"],
+        })
+    except Exception as exc:
+        _emit(on_event, {
+            "stage": current_stage,
+            "state": "error",
+            "message": str(exc),
+        })
+        raise
+
+    return ResearchState(**state)
 
 
 if __name__ == "__main__":
-    topic = input("\nEnter a research topic : ")
-    run_research_pipeline(topic)
+    research_topic = input("Enter a research topic: ")
+    completed = run_research_pipeline(research_topic)
+    print(completed["report"])
