@@ -1,28 +1,84 @@
 # Research Mind
 
-Research Mind is a multi-agent research workspace that turns a focused question
-into a sourced report and an independent quality review. A Streamlit interface
-shows each handoff in real time while a LangChain pipeline coordinates search,
-source reading, synthesis, and critique.
+> An inspectable multi-agent research system that turns one focused question
+> into a sourced report and an independent quality review.
+
+[![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://researchmind-7.streamlit.app)
+
+**[Launch the live application](https://researchmind-7.streamlit.app)** ·
+**[View the architecture](#architecture)** ·
+**[Run locally](#local-development)**
 
 ![Research Mind agent pipeline](docs/assets/research-mind-pipeline.png)
 
-## Why this project
+Research Mind coordinates specialized LangChain agents and LCEL chains across
+four explicit stages: source discovery, evidence extraction, report synthesis,
+and independent review. Its Streamlit interface exposes each operational
+handoff in real time, preserves completed work when a later stage fails, and
+exports the finished analysis as Markdown.
 
-Research tasks often hide the path between a prompt and the final answer.
-Research Mind makes that path inspectable through four explicit stages, typed
-pipeline state, operational progress events, recoverable partial output, and a
-separate critic pass.
+## Table of contents
 
-### Product highlights
+- [Why Research Mind](#why-research-mind)
+- [Product capabilities](#product-capabilities)
+- [How it works](#how-it-works)
+- [Architecture](#architecture)
+- [Technology](#technology)
+- [Project structure](#project-structure)
+- [Use the hosted application](#use-the-hosted-application)
+- [Local development](#local-development)
+- [Testing](#testing)
+- [Pipeline API](#pipeline-api)
+- [Reliability and security](#reliability-and-security)
+- [Troubleshooting](#troubleshooting)
 
-- **Live execution trace** for discovery, reading, synthesis, and review.
-- **Sourced report generation** using Tavily search and web extraction.
-- **Independent critique** with a structured score, strengths, and gaps.
-- **Failure-aware UI** that preserves completed work when a later stage fails.
-- **Credential-safe startup** with disabled execution and clear setup guidance.
-- **Persistent results** across Streamlit reruns, plus Markdown export.
-- **Responsive custom interface** inspired by Mistral's restrained visual system.
+## Why Research Mind
+
+Most research assistants show only the final answer, which makes source quality,
+pipeline failures, and intermediate decisions difficult to inspect. Research
+Mind presents the workflow as a visible sequence of specialized stages with a
+typed state contract and structured progress events.
+
+This project demonstrates:
+
+- multi-agent orchestration with clear boundaries between responsibilities;
+- LCEL composition for deterministic writer and critic chains;
+- observable execution without exposing private model reasoning;
+- failure-aware product design that retains completed intermediate output;
+- a responsive, custom Streamlit interface with persistent session state; and
+- deployment-ready dependency and secret management.
+
+## Product capabilities
+
+- **Live execution trace** — see Discover, Read, Synthesize, and Review progress
+  as the pipeline runs.
+- **Current web research** — retrieve up to five relevant sources through
+  Tavily, including titles, URLs, and snippets.
+- **Focused evidence extraction** — select the strongest result and turn the
+  source page into clean, bounded text.
+- **Structured synthesis** — generate a professional Markdown report with an
+  introduction, key findings, conclusion, and sources.
+- **Independent critique** — score the report out of ten and surface strengths,
+  gaps, and a concise verdict.
+- **Recoverable failures** — retain prior stage outputs if a provider or page
+  fails later in the run.
+- **Session persistence** — keep completed results across Streamlit reruns.
+- **Portable output** — download the report and critic assessment as Markdown.
+- **Credential-aware controls** — disable execution and identify missing keys
+  before a request can fail.
+
+## How it works
+
+| Stage | Component | Responsibility | Output |
+| --- | --- | --- | --- |
+| 01 · Discover | LangChain search agent | Find current, relevant sources | Titles, URLs, and snippets |
+| 02 · Read | LangChain reader agent | Select and extract the strongest source | Clean source text |
+| 03 · Synthesize | LCEL writer chain | Combine discovery and extracted evidence | Structured Markdown report |
+| 04 · Review | LCEL critic chain | Challenge evidence, structure, and clarity | Score and actionable critique |
+
+The workflow is sequential by design: every stage consumes the previous stage's
+output. The UI receives operational status events while the orchestration layer
+remains reusable from Python or the command line.
 
 ## Architecture
 
@@ -33,148 +89,140 @@ flowchart LR
     P --> D[Discover agent]
     D -->|Tavily| W[Web sources]
     W --> R[Reader agent]
-    R -->|Requests + BeautifulSoup| E[Extracted evidence]
+    R -->|Requests + Beautiful Soup| E[Extracted evidence]
     E --> S[LCEL writer chain]
     S --> C[LCEL critic chain]
     C --> O[Report + review]
-    P -. operational events .-> UI
+    P -. progress events .-> UI
 ```
 
-| Stage | Responsibility | Output |
-| --- | --- | --- |
-| Discover | Find up to five current, relevant sources | Titles, URLs, and snippets |
-| Read | Select and extract the strongest source | Clean source text |
-| Synthesize | Combine search results and evidence | Structured Markdown report |
-| Review | Challenge clarity, evidence, and structure | Score and actionable critique |
-
-The search and reader stages use LangChain agents. The writer and critic use
-LCEL chains backed by Groq. `run_research_pipeline` remains usable without a UI
-and accepts an optional event callback for other clients.
+`run_research_pipeline` owns orchestration and returns a typed `ResearchState`.
+An optional callback receives `running`, `complete`, and `error` events for each
+stage. Streamlit uses those events to update the pipeline rail and cache partial
+outputs in `st.session_state`.
 
 ## Technology
 
-- Python 3.14
-- Streamlit
-- LangChain and LCEL
-- Groq (`openai/gpt-oss-120b`)
-- Tavily Search
-- Requests and Beautiful Soup
-- `uv` for dependency and lockfile management
-- `unittest` and Streamlit's application test harness
+| Layer | Technology |
+| --- | --- |
+| Application | Python 3.14, Streamlit |
+| Agent orchestration | LangChain agents, LCEL |
+| Language model | Groq `openai/gpt-oss-120b` |
+| Search | Tavily Search API |
+| Extraction | Requests, Beautiful Soup, lxml |
+| State and validation | Typed dictionaries, Streamlit session state |
+| Dependency management | `uv`, `pyproject.toml`, `uv.lock` |
+| Verification | `unittest`, Streamlit AppTest |
+
+The model name contains `openai`, but inference runs through Groq. The
+application does **not** require an `OPENAI_API_KEY`.
 
 ## Project structure
 
 ```text
 research-mind/
 ├── ui/
+│   ├── __init__.py
 │   └── app.py              # Streamlit product interface
 ├── src/
 │   ├── agents.py           # Agent and LCEL chain factories
 │   ├── pipeline.py         # Typed orchestration and progress events
 │   └── tools/
 │       ├── search_api.py   # Tavily search tool
-│       └── web_scraper.py  # Source extraction tool
+│       └── web_scraper.py  # Bounded source extraction tool
 ├── tests/
-│   ├── test_app.py         # UI state and rendering smoke tests
+│   ├── test_app.py         # UI state and rendering tests
 │   └── test_pipeline.py    # Pipeline contract and failure tests
 ├── docs/assets/            # README media
+├── .python-version
 ├── pyproject.toml
 └── uv.lock
 ```
 
-## Quick start
+## Use the hosted application
 
-### 1. Install dependencies
+Open **[researchmind-7.streamlit.app](https://researchmind-7.streamlit.app)**.
 
-Install [uv](https://docs.astral.sh/uv/) and use the checked-in lockfile:
+1. Enter a focused question. Include a timeframe, comparison, or evidence
+   standard when it matters.
+2. Select **Run research**.
+3. Follow the four-stage execution trace.
+4. Review the sourced report and the separate critic assessment.
+5. Inspect the discovery and extraction outputs, then download the result.
 
-```powershell
-uv sync
+Provider credentials are configured in the deployment. No key should be pasted
+into the application interface.
+
+## Local development
+
+### Prerequisites
+
+- Python 3.14
+- [`uv`](https://docs.astral.sh/uv/)
+- a [Groq API key](https://console.groq.com/keys)
+- a [Tavily API key](https://app.tavily.com/)
+
+### 1. Clone and install
+
+```bash
+git clone https://github.com/Vansh-7/research-mind.git
+cd research-mind
+uv sync --locked
 ```
 
-### 2. Configure providers
+`uv sync --locked` reproduces the dependency versions recorded in `uv.lock`
+and fails instead of silently changing the lockfile.
 
-Create `.env` in the repository root:
+### 2. Configure environment variables
+
+Create a `.env` file in the repository root:
 
 ```dotenv
 GROQ_API_KEY=your_groq_key
 TAVILY_API_KEY=your_tavily_key
 ```
 
-| Variable | Purpose | Required |
+| Variable | Used for | Required |
 | --- | --- | --- |
-| `GROQ_API_KEY` | Runs the research agents, writer, and critic | Yes |
-| `TAVILY_API_KEY` | Finds current web sources | Yes |
+| `GROQ_API_KEY` | Search and reader agents, report writer, critic | Yes |
+| `TAVILY_API_KEY` | Current web source discovery | Yes |
 
-The application can render without credentials. Research execution remains
-disabled until every required key is available. Secrets are loaded from `.env`,
-which is excluded from version control.
+`.env` and `.streamlit/secrets.toml` are excluded from version control. The UI
+still renders without credentials, but research execution remains disabled and
+the missing configuration is shown to the user.
 
-### 3. Run the application
+### 3. Start the Streamlit application
 
-```powershell
+```bash
 uv run streamlit run ui/app.py
 ```
 
-Open the local address printed by Streamlit, typically
-`http://localhost:8501`.
+Open the address printed by Streamlit, normally `http://localhost:8501`.
 
-### Command-line execution
+### 4. Run from the command line
 
-The orchestration layer also runs independently of Streamlit:
+The orchestration layer also works without Streamlit:
 
-```powershell
+```bash
 uv run python -m src.pipeline
 ```
 
-## Deploy on Streamlit Community Cloud
-
-The repository is organized for direct deployment from its subdirectory
-entrypoint. Streamlit Community Cloud runs the command from the repository root,
-so keep the app path exactly as shown below.
-
-1. Open [Streamlit Community Cloud](https://share.streamlit.io/) and select
-   **Create app**.
-2. Choose the GitHub repository and the branch you want to deploy.
-3. Set **Main file path** to `ui/app.py`.
-4. Open **Advanced settings** and select **Python 3.14**. The project declares
-   Python 3.14 or newer, while Community Cloud currently defaults to Python
-   3.12.
-5. Paste the following into the **Secrets** field, using real values:
-
-   ```toml
-   GROQ_API_KEY = "your_groq_key"
-   TAVILY_API_KEY = "your_tavily_key"
-   ```
-
-6. Select **Deploy** and use the build logs to verify startup.
-
-Community Cloud detects the root `uv.lock` and installs the locked dependencies
-with `uv`. Root-level Streamlit secrets are also exposed as environment
-variables, so the same application code works locally with `.env` and in the
-hosted environment with Streamlit Secrets. Never commit `.env` or
-`.streamlit/secrets.toml`.
-
-Official references:
-
-- [Deploy an app](https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app/deploy)
-- [Dependency files](https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app/app-dependencies)
-- [Secrets management](https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app/secrets-management)
+Enter a topic at the prompt. The command prints the completed report after all
+four stages finish.
 
 ## Testing
 
-Tests use stubbed agents and do not call Groq, Tavily, or external websites.
-
-```powershell
+```bash
 uv run python -m unittest discover -s tests -v
 ```
 
-The suite verifies:
+The suite uses stubbed agents and makes no calls to Groq, Tavily, or external
+websites. It verifies:
 
 - pipeline order and the returned state contract;
 - running, completed, and failed event emission;
 - blank-topic validation and per-stage error attribution;
-- credential-aware UI behavior and persistent completed results;
+- credential-aware UI behavior and session-persistent results;
 - critic score parsing and Markdown export generation.
 
 ## Pipeline API
@@ -196,34 +244,42 @@ print(result["report"])
 print(result["feedback"])
 ```
 
-Events contain operational status and completed output. They do not expose
-private model reasoning or chain-of-thought.
+Each event follows this contract:
 
 ```python
 {
     "stage": "search",      # search | reader | writer | critic
     "state": "complete",   # running | complete | error
     "message": "Source discovery complete.",
-    "output": "...",       # present when a stage completes
+    "output": "...",       # included when a stage completes
 }
 ```
 
-## Extending the system
+Events contain operational status and completed output. They do not expose
+private model reasoning or chain-of-thought.
 
-- Change the model or provider in `src/agents.py::_build_llm`.
-- Add tools to the agent factories in `src/agents.py`.
-- Add a stage by extending the typed stage names and orchestration in
-  `src/pipeline.py`, then mirror it in the UI `STAGES` configuration.
-- Reuse `on_event` to stream pipeline state to another frontend, job queue, or
-  observability service.
+## Reliability and security
 
-## Operational notes
+- Required credentials are checked before execution and their values are never
+  rendered in the UI.
+- Provider secrets remain in local environment variables or Streamlit Secrets.
+- The scraper uses an eight-second timeout, checks HTTP status, removes common
+  layout elements, and caps extracted content at 12,000 characters.
+- Every stage emits an error event before an exception returns to the UI.
+- Completed intermediate output remains available after downstream failures.
+- User-visible model output is escaped or rendered through Streamlit's Markdown
+  components; operational logs do not reveal hidden model reasoning.
 
-- The pipeline is intentionally sequential because each stage consumes the
-  preceding stage's output.
-- The scraper applies an HTTP timeout, checks response status, removes common
-  layout elements, and caps extracted content.
-- A downstream failure emits an error event and leaves earlier stage output
-  available for inspection.
-- Generated research should be reviewed before consequential use; source
-  availability and model output quality can vary.
+Generated research can still contain incomplete or incorrect claims. Review
+the original sources before using a report for consequential decisions.
+
+## Troubleshooting
+
+| Symptom | Resolution |
+| --- | --- |
+| **Run research** is unavailable | Enter a research question first. If the button remains unavailable, refresh the page and try again later. |
+| A stage is taking longer than expected | Research time depends on source availability and provider response times. Keep the page open while the live pipeline is active. |
+| A source cannot be read | Some websites block automated access or require JavaScript. Retry the run so the system can select a different source. |
+| The report is too broad or incomplete | Ask a narrower question and include the timeframe, region, comparison, and evidence standard you need. |
+| A run stops before completion | Review the displayed error, inspect any preserved work, and retry. Temporary source or provider failures often resolve on a later run. |
+| The downloaded report does not appear | Check the browser's download permissions and downloads folder, then select **Download report** again. |
