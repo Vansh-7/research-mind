@@ -127,6 +127,40 @@ The orchestration layer also runs independently of Streamlit:
 uv run python -m src.pipeline
 ```
 
+## Deploy on Streamlit Community Cloud
+
+The repository is organized for direct deployment from its subdirectory
+entrypoint. Streamlit Community Cloud runs the command from the repository root,
+so keep the app path exactly as shown below.
+
+1. Open [Streamlit Community Cloud](https://share.streamlit.io/) and select
+   **Create app**.
+2. Choose the GitHub repository and the branch you want to deploy.
+3. Set **Main file path** to `ui/app.py`.
+4. Open **Advanced settings** and select **Python 3.14**. The project declares
+   Python 3.14 or newer, while Community Cloud currently defaults to Python
+   3.12.
+5. Paste the following into the **Secrets** field, using real values:
+
+   ```toml
+   GROQ_API_KEY = "your_groq_key"
+   TAVILY_API_KEY = "your_tavily_key"
+   ```
+
+6. Select **Deploy** and use the build logs to verify startup.
+
+Community Cloud detects the root `uv.lock` and installs the locked dependencies
+with `uv`. Root-level Streamlit secrets are also exposed as environment
+variables, so the same application code works locally with `.env` and in the
+hosted environment with Streamlit Secrets. Never commit `.env` or
+`.streamlit/secrets.toml`.
+
+Official references:
+
+- [Deploy an app](https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app/deploy)
+- [Dependency files](https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app/app-dependencies)
+- [Secrets management](https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app/secrets-management)
+
 ## Testing
 
 Tests use stubbed agents and do not call Groq, Tavily, or external websites.
