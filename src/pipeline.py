@@ -13,6 +13,7 @@ from .agents import (
     build_search_agent,
     build_writer_chain,
 )
+from .token_budget import truncate_tokens
 
 StageName = Literal["search", "reader", "writer", "critic"]
 StageState = Literal["running", "complete", "error"]
@@ -34,6 +35,12 @@ class PipelineEvent(TypedDict):
 
 EventCallback = Callable[[PipelineEvent], None]
 
+MAX_TOPIC_TOKENS = 160
+MAX_READER_SEARCH_TOKENS = 300
+MAX_WRITER_SEARCH_TOKENS = 450
+MAX_WRITER_EVIDENCE_TOKENS = 550
+MAX_CRITIC_REPORT_TOKENS = 800
+
 
 def _emit(on_event: EventCallback | None, event: PipelineEvent) -> None:
     if on_event is not None:
@@ -53,9 +60,16 @@ def _message_content(response: dict) -> str:
 
 def _is_rate_limit_error(exc: Exception) -> bool:
     response = getattr(exc, "response", None)
+    body = getattr(exc, "body", None)
+    error = body.get("error", {}) if isinstance(body, dict) else {}
+    status_code = getattr(
+        exc,
+        "status_code",
+        getattr(response, "status_code", None),
+    )
     return (
-        getattr(exc, "status_code", None) == 429
-        or getattr(response, "status_code", None) == 429
+        status_code == 429
+        or (status_code == 413 and error.get("code") == "rate_limit_exceeded")
     )
 
 
@@ -90,6 +104,7 @@ def run_research_pipeline(
     normalized_topic = topic.strip()
     if not normalized_topic:
         raise ValueError("Research topic cannot be blank.")
+    normalized_topic = truncate_tokens(normalized_topic, MAX_TOPIC_TOKENS)
 
     state: dict[str, str] = {}
     current_stage: StageName = "search"
@@ -122,7 +137,8 @@ def run_research_pipeline(
             "messages": [("user", f"Based on the following search results about "
                           f"'{normalized_topic}', pick the most relevant URL and "
                           "scrape it for deeper content.\n\n"
-                          f"Search Results:\n{state['search_results'][:800]}")]
+                          "Search Results:\n"
+                          f"{truncate_tokens(state['search_results'], MAX_READER_SEARCH_TOKENS)}")]
         })
         state["scraped_content"] = _message_content(reader_result)
         _emit(on_event, {
@@ -139,8 +155,10 @@ def run_research_pipeline(
             "message": "Synthesizing evidence into a structured report.",
         })
         research = (
-            f"SEARCH RESULTS:\n{state['search_results']}\n\n"
-            f"DETAILED SCRAPED CONTENT:\n{state['scraped_content']}"
+            "SEARCH RESULTS:\n"
+            f"{truncate_tokens(state['search_results'], MAX_WRITER_SEARCH_TOKENS)}"
+            "\n\nDETAILED SCRAPED CONTENT:\n"
+            f"{truncate_tokens(state['scraped_content'], MAX_WRITER_EVIDENCE_TOKENS)}"
         )
         state["report"] = build_writer_chain().invoke(
             {"topic": normalized_topic, "research": research}
@@ -159,7 +177,11 @@ def run_research_pipeline(
             "message": "Reviewing evidence, structure, and clarity.",
         })
         state["feedback"] = build_critic_chain().invoke(
-            {"report": state["report"]}
+            {
+                "report": truncate_tokens(
+                    state["report"], MAX_CRITIC_REPORT_TOKENS
+                )
+            }
         )
         _emit(on_event, {
             "stage": "critic",

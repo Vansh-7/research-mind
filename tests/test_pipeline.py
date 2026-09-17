@@ -116,6 +116,26 @@ class PipelineTests(unittest.TestCase):
         self.assertIn("openai/gpt-oss-120b", events[-1]["message"])
         self.assertIn("Completed stages are preserved", events[-1]["message"])
 
+    @patch.object(pipeline, "build_search_agent")
+    def test_pipeline_translates_tpm_request_too_large_errors(self, search):
+        error = RuntimeError("request exceeds TPM")
+        error.status_code = 413
+        error.body = {
+            "error": {
+                "type": "tokens",
+                "code": "rate_limit_exceeded",
+            }
+        }
+        error.response = SimpleNamespace(status_code=413, headers={})
+        search.return_value = Invokable(error)
+        events = []
+
+        with self.assertRaisesRegex(RuntimeError, "about 60 seconds"):
+            pipeline.run_research_pipeline("edge AI", on_event=events.append)
+
+        self.assertEqual(events[-1]["state"], "error")
+        self.assertIn("quota is temporarily exhausted", events[-1]["message"])
+
 
 if __name__ == "__main__":
     unittest.main()

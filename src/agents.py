@@ -28,10 +28,10 @@ GROQ_TOKENS_PER_DAY = 200_000
 # limiter is shared by every model instance, coordinating Streamlit sessions
 # inside one application process.
 SAFE_REQUESTS_PER_MINUTE = 5
-SEARCH_MAX_TOKENS = 450
-READER_MAX_TOKENS = 600
-REPORT_MAX_TOKENS = 900
-CRITIC_MAX_TOKENS = 450
+SEARCH_MAX_TOKENS = 400
+READER_MAX_TOKENS = 450
+REPORT_MAX_TOKENS = 800
+CRITIC_MAX_TOKENS = 300
 _MODEL_RATE_LIMITER = InMemoryRateLimiter(
     requests_per_second=SAFE_REQUESTS_PER_MINUTE / 60,
     check_every_n_seconds=0.1,

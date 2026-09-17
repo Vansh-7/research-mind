@@ -6,7 +6,9 @@ from bs4 import BeautifulSoup
 from langchain.tools import tool
 import requests
 
-MAX_CONTENT_CHARS = 4_000
+from ..token_budget import truncate_tokens
+
+MAX_SCRAPED_CONTENT_TOKENS = 800
 
 
 @tool
@@ -22,6 +24,7 @@ def scrape_url(url: str) -> str:
         soup = BeautifulSoup(response.text, "html.parser")
         for tag in soup(["script", "style", "nav", "footer"]):
             tag.decompose()
-        return soup.get_text(separator=" ", strip=True)[:MAX_CONTENT_CHARS]
+        content = soup.get_text(separator=" ", strip=True)
+        return truncate_tokens(content, MAX_SCRAPED_CONTENT_TOKENS)
     except requests.RequestException as exc:
         return f"Could not scrape URL: {exc}"

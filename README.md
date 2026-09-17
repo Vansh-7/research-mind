@@ -264,7 +264,7 @@ private model reasoning or chain-of-thought.
   rendered in the UI.
 - Provider secrets remain in local environment variables or Streamlit Secrets.
 - The scraper uses an eight-second timeout, checks HTTP status, removes common
-  layout elements, and caps extracted content at 4,000 characters.
+  layout elements, and caps extracted content with the GPT-OSS tokenizer.
 - Every stage emits an error event before an exception returns to the UI.
 - Completed intermediate output remains available after downstream failures.
 - Groq calls share a process-wide throttle, use bounded prompts and completions,

@@ -8,9 +8,12 @@ from dotenv import load_dotenv
 from langchain.tools import tool
 from tavily import TavilyClient
 
+from ..token_budget import truncate_tokens
+
 load_dotenv()
 
 MAX_SNIPPET_CHARS = 300
+MAX_SEARCH_RESULT_TOKENS = 600
 
 
 @tool
@@ -35,4 +38,4 @@ def web_search(query: str) -> str:
                 ]
             )
         )
-    return "\n-----\n".join(entries)
+    return truncate_tokens("\n-----\n".join(entries), MAX_SEARCH_RESULT_TOKENS)
